@@ -93,8 +93,8 @@ def predict():
             errors.append("Minimum temperature cannot exceed maximum temperature.")
         if incont_total < 0:
             errors.append("Incontinence episodes cannot be negative.")
-        if not (0 <= icu_days <= 365):
-            errors.append("ICU length of stay must be between 0 and 365 days.")
+        if icu_days < 0:
+            errors.append("ICU length of stay cannot be negative.")
         if errors:
             return jsonify({"error": " ".join(errors)})
 

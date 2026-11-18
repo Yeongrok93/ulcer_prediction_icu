@@ -30,4 +30,4 @@ vercel login
 vercel --prod
 ```
 When the notebook is re-run, copy the new pickle:
-`copy "..\..\..\..\아산병원논문투고\ulcer_prediction.pkl" model\` and redeploy.
+`copy ..\ulcer_prediction.pkl model\` and redeploy.

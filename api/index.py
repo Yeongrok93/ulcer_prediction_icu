@@ -1,14 +1,16 @@
-"""Pressure Injury Risk Calculator — Flask app for Vercel (serverless).
+"""ICU Pressure Injury Risk Calculator — Flask app for Vercel (serverless).
 
-Model: Gaussian Naive Bayes (SMOTE-trained) + isotonic recalibration, saved from
-analysis.ipynb as a plain scikit-learn CalibratedClassifierCV (no imblearn dependency).
+Model (exported from analysis.ipynb):
+    StandardScaler -> GaussianNB, wrapped in sklearn CalibratedClassifierCV(method="isotonic", cv=5).
+    No resampling. Operating threshold (calibrated probability) is read from model/model_meta.json.
 
-Feature order expected by the model (same as the notebook's feature_cols):
-    0 RASS mean, 1 lower-limb muscle strength (0-10), 2 max temp, 3 min temp,
-    4 log1p(daily incontinence episodes)
+Feature order (model_meta.json["features"]):
+    0 mean RASS, 1 mean lower-limb muscle strength (0-10), 2 max temp, 3 min temp,
+    4 log1p(daily fecal incontinence episodes)
 """
-import os
+import json
 import math
+import os
 
 import joblib
 import numpy as np
@@ -23,8 +25,11 @@ app = Flask(
     static_folder=os.path.join(ROOT_DIR, "static"),
 )
 
-MODEL_PATH = os.path.join(ROOT_DIR, "model", "ulcer_prediction.pkl")
-model = joblib.load(MODEL_PATH)
+MODEL_DIR = os.path.join(ROOT_DIR, "model")
+model = joblib.load(os.path.join(MODEL_DIR, "ulcer_prediction.pkl"))
+with open(os.path.join(MODEL_DIR, "model_meta.json"), encoding="utf-8") as f:
+    META = json.load(f)
+THRESHOLD = float(META["threshold"])
 
 FEATURE_LABELS = [
     "Mean level of consciousness (RASS) during stay",
@@ -35,39 +40,43 @@ FEATURE_LABELS = [
 ]
 
 
-def _base_pipeline():
-    """Return the underlying (scaler -> GaussianNB) pipeline inside CalibratedClassifierCV."""
-    cc = model.calibrated_classifiers_[0]
-    return getattr(cc, "estimator", None) or getattr(cc, "base_estimator")
+def _base_pipelines():
+    """The (scaler -> GaussianNB) pipelines inside CalibratedClassifierCV (one per calibration fold)."""
+    out = []
+    for cc in model.calibrated_classifiers_:
+        est = getattr(cc, "estimator", None) or getattr(cc, "base_estimator")
+        out.append(est)
+    return out
 
 
 def feature_contributions(x_row):
-    """Exact per-feature log-likelihood-ratio decomposition of Gaussian Naive Bayes.
+    """Per-feature log-likelihood-ratio decomposition of Gaussian Naive Bayes, averaged over calibration folds.
 
-    log P(PI | x) / P(no PI | x) = log(prior ratio) + sum_i [ log N(x_i | mu_1i, var_1i)
-                                                              - log N(x_i | mu_0i, var_0i) ]
+    log P(PI | x) / P(no PI | x) = log(prior ratio) + sum_i [ log N(x_i | mu_1i, var_1i) - log N(x_i | mu_0i, var_0i) ]
     Positive value -> the feature pushes the prediction toward pressure injury.
     """
-    pipe = _base_pipeline()
-    scaler, gnb = pipe.named_steps["scaler"], pipe.named_steps["clf"]
-    z = scaler.transform(np.asarray(x_row, dtype=float).reshape(1, -1))[0]
-    theta, var = gnb.theta_, gnb.var_
-    contrib = []
-    for i in range(len(z)):
-        ll1 = -0.5 * math.log(2 * math.pi * var[1, i]) - (z[i] - theta[1, i]) ** 2 / (2 * var[1, i])
-        ll0 = -0.5 * math.log(2 * math.pi * var[0, i]) - (z[i] - theta[0, i]) ** 2 / (2 * var[0, i])
-        contrib.append(ll1 - ll0)
-    return contrib
+    x = np.asarray(x_row, dtype=float).reshape(1, -1)
+    total = np.zeros(x.shape[1])
+    pipes = _base_pipelines()
+    for pipe in pipes:
+        scaler, gnb = pipe.named_steps["scaler"], pipe.named_steps["clf"]
+        z = scaler.transform(x)[0]
+        theta, var = gnb.theta_, gnb.var_
+        for i in range(len(z)):
+            ll1 = -0.5 * math.log(2 * math.pi * var[1, i]) - (z[i] - theta[1, i]) ** 2 / (2 * var[1, i])
+            ll0 = -0.5 * math.log(2 * math.pi * var[0, i]) - (z[i] - theta[0, i]) ** 2 / (2 * var[0, i])
+            total[i] += ll1 - ll0
+    return (total / len(pipes)).tolist()
 
 
 @app.route("/")
 def home():
-    return render_template("index.html")
+    return render_template("index.html", threshold_pct=round(THRESHOLD * 100, 1))
 
 
 @app.route("/health")
 def health():
-    return jsonify({"status": "ok"})
+    return jsonify({"status": "ok", "threshold": THRESHOLD})
 
 
 @app.route("/predict", methods=["POST"])
@@ -81,7 +90,7 @@ def predict():
         incont_total = float(f["incontinence_total"])
         icu_days = float(f["icu_days"])
 
-        # ---- input validation (same plausible ranges used in model development)
+        # ---- input validation (same plausibility ranges used in model development)
         errors = []
         if not (-5 <= rass <= 4):
             errors.append("RASS must be between -5 and +4.")
@@ -104,6 +113,7 @@ def predict():
         x = [rass, strength, temp_max, temp_min, math.log1p(daily_incont)]
 
         proba = float(model.predict_proba(np.array([x]))[0, 1])
+        screen_positive = proba >= THRESHOLD
 
         contrib = feature_contributions(x)
         shown_vals = [rass, strength, temp_max, temp_min, round(daily_incont, 2)]
@@ -111,7 +121,7 @@ def predict():
             {"feature": FEATURE_LABELS[i], "value": shown_vals[i], "contribution": contrib[i]}
             for i in range(5)
         ]
-        # keep only the more influential of the two temperature terms (as in the original app)
+        # keep only the more influential of the two temperature terms
         if items[2]["contribution"] >= items[3]["contribution"]:
             items.pop(3)
         else:
@@ -125,6 +135,8 @@ def predict():
 
         return jsonify({
             "probability": round(proba * 100, 1),
+            "threshold": round(THRESHOLD * 100, 1),
+            "screen_positive": screen_positive,
             "daily_incontinence": round(daily_incont, 2),
             "risk_factors": positives,
         })

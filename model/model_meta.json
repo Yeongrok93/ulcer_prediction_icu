@@ -1,0 +1,21 @@
+{
+  "model": "GaussianNB (StandardScaler) + isotonic calibration (CalibratedClassifierCV, cv=5)",
+  "features": [
+    "RASS 평균값",
+    "motor strength LE 평균",
+    "체온(최대)",
+    "체온(최소)",
+    "하루평균실금_log"
+  ],
+  "feature_names_en": [
+    "Level of consciousness (RASS)",
+    "Lower limb muscle strength",
+    "Max body temperature",
+    "Min body temperature",
+    "Daily incontinence (log)"
+  ],
+  "threshold": 0.1049,
+  "threshold_rule": "highest calibrated probability with out-of-fold sensitivity >= 0.8 (training set, 5-fold)",
+  "train_prevalence": 0.1741,
+  "test_auroc": 0.7723
+}

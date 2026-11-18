@@ -76,6 +76,7 @@
     <div id="result" class="card-soft p-4 mt-4 d-none">
         <h5 class="text-center fw-bold mb-2">Estimated probability of pressure injury</h5>
         <p class="text-center result-prob text-primary mb-1"><span id="probability"></span>%</p>
+        <p class="text-center mb-1"><span id="screen-flag" class="badge rounded-pill fs-6"></span></p>
         <p class="text-center text-muted mb-3" id="daily-line"></p>
         <h6 class="fw-bold">Factors raising the estimate</h6>
         <div id="factors"></div>
@@ -104,7 +105,7 @@
         </div>
         <div class="qa-item">
             <div class="question" onclick="toggleAnswer(this)">How accurate is the model?<span class="icon">+</span></div>
-            <div class="answer">In internal validation on a held-out test set (30% of 23,443 adult ICU admissions from a single tertiary hospital), the area under the ROC curve was 0.90 with sensitivity 0.83 and specificity 0.85 at the default 50% threshold. Performance has not been externally validated and may differ in other settings.</div>
+            <div class="answer">In internal validation on a held-out test set (30% of 5,639 adult ICU admissions with a stay longer than 48 hours, single tertiary hospital), the area under the ROC curve was 0.77. At the screening threshold of {{ threshold_pct }}% (chosen for sensitivity ≥ 0.80), sensitivity was 0.86, specificity 0.51, and negative predictive value 0.95. Performance has not been externally validated and may differ in other settings.</div>
         </div>
         <div class="qa-item">
             <div class="question" onclick="toggleAnswer(this)">What period should the inputs cover?<span class="icon">+</span></div>
@@ -146,6 +147,11 @@
                 loading.classList.add("d-none");
                 if (data.error) { alert("Error: " + data.error); return; }
                 document.getElementById("probability").textContent = data.probability;
+                const flag = document.getElementById("screen-flag");
+                flag.textContent = data.screen_positive
+                    ? "Screen positive — at or above the " + data.threshold + "% screening threshold"
+                    : "Screen negative — below the " + data.threshold + "% screening threshold";
+                flag.className = "badge rounded-pill fs-6 " + (data.screen_positive ? "text-bg-danger" : "text-bg-success");
                 document.getElementById("daily-line").textContent =
                     "Daily incontinence used: " + data.daily_incontinence + " episodes/day";
                 const box = document.getElementById("factors");
